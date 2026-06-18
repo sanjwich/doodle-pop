@@ -229,12 +229,14 @@
   // ---------------------------------------------------------------------------
   // 6 felt colours; brightness deliberately varied (not just hue) for
   // colourblind legibility, each with a distinct pip symbol.
+  // Early game uses the first 3 (lime / sky / pink); purple, teal, then red ramp
+  // in. Brightness is deliberately varied (not just hue) for colourblind legibility.
   const COLORS = [
     { name: 'lime',   lo: '#bcd62b', hi: '#e9f37b', rim: 'rgba(120,140,30,0.55)', pip: 'circle' },
     { name: 'sky',    lo: '#3f9fe0', hi: '#abe2ff', rim: 'rgba(30,90,150,0.55)',  pip: 'square' },
-    { name: 'coral',  lo: '#ff6a3d', hi: '#ffc09a', rim: 'rgba(150,55,25,0.55)',  pip: 'triangle' },
+    { name: 'pink',   lo: '#ff5fa6', hi: '#ffc6e0', rim: 'rgba(150,30,90,0.55)',  pip: 'heart' },
     { name: 'grape',  lo: '#8a4fe0', hi: '#d6b8ff', rim: 'rgba(70,35,130,0.55)',  pip: 'star' },
-    { name: 'rose',   lo: '#ff4f97', hi: '#ffbcdb', rim: 'rgba(150,30,85,0.55)',  pip: 'heart' },
+    { name: 'teal',   lo: '#16b5a6', hi: '#92efe0', rim: 'rgba(15,95,90,0.55)',   pip: 'triangle' },
     { name: 'cherry', lo: '#d32f3a', hi: '#ff9c95', rim: 'rgba(120,20,25,0.55)',  pip: 'cross' },
   ];
   // Specials live in the launch queue (rainbow becomes a board resident; the
@@ -588,9 +590,10 @@
   // ---------------------------------------------------------------------------
   // Tennis ball renderer (recoloured per game colour; specials overlaid)
   // ---------------------------------------------------------------------------
-  function drawTennisBall(cx, cy, r, cell) {
+  function drawTennisBall(cx, cy, r, cell, rot) {
     ctx.save();
     ctx.translate(cx, cy);
+    if (rot) ctx.rotate(rot);
     const kind = cell && cell.kind;
     if (kind === 'rainbow') { drawRainbow(r); ctx.restore(); return; }
     if (kind === 'stone') { drawStone(r, cell); ctx.restore(); return; }
@@ -962,31 +965,33 @@
   function drawAim() {
     if (!cur || proj || inputLock) return;
     const a = assist();
-    const sim = simulateAim(a >= 1 ? 3 : 1);
-    const pts = sim.pts;
-    // dotted polyline
+    const pts = simulateAim(3).pts;
+    // Dotted aim line shows your DIRECTION and the first wall bank — but not
+    // where the ball lands; judging that is the skill. The line shortens as the
+    // difficulty ramps. (No landing ghost.)
+    const maxLen = a >= 2 ? 430 : a >= 1 ? 320 : 230;
     ctx.save();
-    ctx.strokeStyle = frenzy > 0 ? 'rgba(255,240,150,0.9)' : 'rgba(255,255,255,0.8)';
+    ctx.strokeStyle = frenzy > 0 ? 'rgba(255,240,150,0.9)' : 'rgba(255,255,255,0.7)';
     ctx.lineWidth = 3; ctx.lineCap = 'round';
-    ctx.setLineDash([2, 10]);
+    ctx.setLineDash([2, 11]);
     ctx.beginPath();
-    let limit = a >= 2 ? pts.length : a >= 1 ? Math.min(pts.length, 3) : 2;
     ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < limit; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    let acc = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const x0 = pts[i - 1].x, y0 = pts[i - 1].y;
+      let x1 = pts[i].x, y1 = pts[i].y;
+      const seg = Math.hypot(x1 - x0, y1 - y0) || 0.0001;
+      if (acc + seg > maxLen) {
+        const t = (maxLen - acc) / seg;
+        ctx.lineTo(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+        break;
+      }
+      ctx.lineTo(x1, y1);
+      acc += seg;
+    }
     ctx.stroke();
     ctx.setLineDash([]);
-    // landing ghost (only with assist)
-    if (a >= 1 && sim.hit) {
-      ctx.globalAlpha = 0.4 + 0.2 * Math.sin(animT * 6);
-      const gc = previewCell(sim.hit);
-      if (gc) drawTennisBall(cellX(gc.r, gc.c), cellY(gc.r), R - 1, cur.kind === 'ball' ? cur : { kind: 'ball', color: 0 });
-      ctx.globalAlpha = 1;
-    }
     ctx.restore();
-  }
-  function previewCell(hit) {
-    const sc = snapCell(hit.x, hit.y);
-    return sc;
   }
 
   // ---------------------------------------------------------------------------
@@ -1054,6 +1059,7 @@
 
     // resident ball (normal or rainbow wildcard)
     grid[r][c] = (ball.kind === 'rainbow') ? { kind: 'rainbow' } : { kind: 'ball', color: ball.color };
+    grid[r][c].land = animT;   // trigger the landing squash-pop
 
     const group = matchGroup(r, c);
     if (group.length >= 3) {
@@ -1539,15 +1545,29 @@
     for (let r = 0; r < grid.length; r++) {
       const row = grid[r];
       for (let c = 0; c < row.length; c++) {
-        if (!row[c]) continue;
-        const y = cellY(r);
-        if (y < -R || y > H + R) continue;
-        if (row[c].kind === 'bomb' || row[c].kind === 'serve') drawSpecialResident(cellX(r, c), y, row[c]);
-        else drawTennisBall(cellX(r, c), y, R, row[c]);
+        const cell = row[c];
+        if (!cell) continue;
+        const by = cellY(r);
+        if (by < -R || by > H + R) continue;
+        // gentle ambient "alive" motion — a soft bob + sway + spin wave so the
+        // board shimmers instead of sitting dead still (purely cosmetic; the
+        // logical cell position is unchanged)
+        const ph = r * 0.55 + c * 0.75;
+        const ox = Math.sin(animT * 1.6 + ph * 1.3) * 0.4;
+        const oy = Math.sin(animT * 2.2 + ph) * 0.9;
+        // rotation is around the ball centre, so the seam visibly sways without
+        // ever opening a gap to its neighbours
+        const rot = Math.sin(animT * 2.0 + ph) * 0.13;
+        // brief squash-pop the instant a ball lands
+        let sc = 1;
+        if (cell.land != null) {
+          const e = animT - cell.land;
+          if (e < 0.35) sc = 1 + Math.sin((e / 0.35) * Math.PI) * 0.16;
+        }
+        drawTennisBall(cellX(r, c) + ox, by + oy, R * sc, cell, rot);
       }
     }
   }
-  function drawSpecialResident(x, y, cell) { drawTennisBall(x, y, R, { kind: 'ball', color: 0 }); }
 
   function drawSpecialProjectile(p) {
     const q = p.ball;
@@ -1563,7 +1583,7 @@
     ctx.fillRect(-r * 0.5, -r * 0.25, r, r * 0.3); ctx.restore();
   }
   function drawFlameBall(x, y, r) {
-    drawTennisBall(x, y, r, { kind: 'ball', color: 2 });
+    drawTennisBall(x, y, r, { kind: 'ball', color: 5 });
     ctx.save(); ctx.translate(x, y);
     for (let i = 0; i < 3; i++) { ctx.fillStyle = ['#ff3b2b', '#ff7a2b', '#ffd24d'][i]; ctx.beginPath(); ctx.ellipse((i - 1) * 4, -r - 2 - i, 4 - i, 8 - i * 1.5, 0, 0, TAU); ctx.fill(); }
     ctx.restore();
