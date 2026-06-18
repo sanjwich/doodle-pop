@@ -207,6 +207,7 @@
   let cbMode = load('cb', false);                // colorblind pips
   let streak = load('streak', 0) | 0;
   let lastPlay = load('lastPlay', '');
+  let levelStars = load('levelStars', {}) || {};   // { levelIndex: bestStars (1-3) }
 
   // Daily streak: tick once per calendar day, award a small treat bonus.
   let streakBonus = 0;
@@ -305,6 +306,14 @@
   let dangerPulse = 0, heartT = 0;
   let zoomiesFlash = 0;
   let clearWiggle = 0;                  // zoomies body-wiggle on board clear
+
+  // mode + levels-mode state
+  let mode = 'arcade';                  // 'arcade' (endless) | 'levels'
+  let currentLevel = 0;
+  let shotsLeft = 0;
+  let levelResult = null;               // 'win' | 'lose'
+  let earnedStars = 0;
+  let starPopT = 0;                     // star reveal animation on the clear card
 
   // juice
   let shake = 0, flash = 0, timeScale = 1;
@@ -1002,6 +1011,7 @@
   // ---------------------------------------------------------------------------
   function fire() {
     if (!cur || proj || inputLock || scene !== 'play') return;
+    if (mode === 'levels' && shotsLeft <= 0) return;
     const speed = 9.2;
     proj = { x: launch.x, y: launch.y, vx: Math.cos(aim.a) * speed, vy: Math.sin(aim.a) * speed, ball: cur };
     fireFlick = 1;
@@ -1009,8 +1019,9 @@
     spawnDust(pupBase.x, pupBase.y + 26);
     playFire();
     cur = nxt;
-    nxt = makeQueueBall(shotsFired > 2);
+    nxt = makeQueueBall(mode === 'arcade' && shotsFired > 2);  // no random specials in levels
     shotsFired++;
+    if (mode === 'levels') shotsLeft = Math.max(0, shotsLeft - 1);
     aiming = false;
     hintEl.classList.add('hidden');
   }
@@ -1280,16 +1291,26 @@
   // ---------------------------------------------------------------------------
   // After-shot resolution (combo, descend, catch, lose)
   // ---------------------------------------------------------------------------
+  function noColorBallsLeft() {
+    for (const row of grid) for (const cell of row)
+      if (cell && (cell.kind === 'ball' || cell.kind === 'caged' || cell.kind === 'rainbow')) return false;
+    return true;
+  }
   function afterShot(popped, n, dropped) {
-    if (popped) {
-      // board cleared?
-      if (grid.every((row) => row.every((x) => x == null))) { boardCleared(); return; }
-    } else {
-      combo = 0; mult = 1;
-    }
     if (popped) mult = clamp(1 + Math.floor(combo / 2), 1, 9);
+    else { combo = 0; mult = 1; }
     afterDrops(dropped || 0);
-    // descend the net on a cadence
+
+    if (mode === 'levels') {
+      // clear all the poppable balls to win; run out of shots to fail
+      if (noColorBallsLeft()) { levelComplete(); return; }
+      if (shotsLeft <= 0 && !proj) { levelFail(); return; }
+      if (score > best) { best = score; newBest = true; }
+      return;
+    }
+
+    // ----- arcade: refill on clear, descend the net, lose at the danger line -----
+    if (popped && noColorBallsLeft()) { boardCleared(); return; }
     shotsSinceDrop++;
     if (shotsSinceDrop >= dropEvery() && frenzy <= 0) { descendNet(); }
     loseCheck();
@@ -1378,7 +1399,7 @@
   // ZOOMIES / frenzy
   // ---------------------------------------------------------------------------
   function addZoom(a) {
-    if (frenzy > 0) return;
+    if (frenzy > 0 || mode === 'levels') return;   // no ZOOMIES in levels mode
     zoom = clamp(zoom + a, 0, 1);
     if (zoom >= 1) enterFrenzy();
   }
@@ -1480,8 +1501,6 @@
   function drawHUD() {
     // score
     textC(String(score), W / 2, NETY + 4, 30, '#fff', 'rgba(40,80,40,0.85)');
-    // combo / multiplier
-    if (mult > 1) textC('x' + mult, W / 2 + 56, NETY + 6, 18, '#ffe14d', 'rgba(120,80,0,0.8)');
     // treats chip
     ctx.fillStyle = 'rgba(0,0,0,0.22)'; roundRect(W - 92, 10, 80, 24, 12); ctx.fill();
     drawTennisBall(W - 80, 22, 8, { kind: 'ball', color: 0 });
@@ -1491,12 +1510,23 @@
     ctx.fillStyle = 'rgba(0,0,0,0.22)'; roundRect(p.x, p.y, p.w, p.h, 8); ctx.fill();
     ctx.fillStyle = '#fff'; ctx.fillRect(p.x + 9, p.y + 7, 4, 12); ctx.fillRect(p.x + 17, p.y + 7, 4, 12);
 
-    // ZOOMIES meter
-    const bw = 150, bx = (W - bw) / 2, by = H - 22;
-    ctx.fillStyle = 'rgba(0,0,0,0.25)'; roundRect(bx, by, bw, 12, 6); ctx.fill();
-    const fillC = frenzy > 0 ? `hsl(${(animT * 200) % 360},90%,60%)` : '#ffcf3f';
-    ctx.fillStyle = fillC; roundRect(bx + 2, by + 2, (bw - 4) * (frenzy > 0 ? 1 : zoom), 8, 4); ctx.fill();
-    textC(frenzy > 0 ? 'FRENZY!' : 'ZOOMIES', W / 2, by - 9, 11, 'rgba(255,255,255,0.85)', null, 800);
+    if (mode === 'levels') {
+      textC('Level ' + (currentLevel + 1), W / 2, NETY + 26, 13, 'rgba(255,255,255,0.92)', 'rgba(40,80,40,0.5)', 800);
+      // shots-remaining chip near the bottom
+      const cy = H - 30, low = shotsLeft <= 3;
+      ctx.fillStyle = 'rgba(0,0,0,0.25)'; roundRect(W / 2 - 64, cy, 128, 24, 12); ctx.fill();
+      drawTennisBall(W / 2 - 46, cy + 12, 9, { kind: 'ball', color: 0 });
+      textC(shotsLeft + ' left', W / 2 + 6, cy + 12, 14, low ? '#ffb15a' : '#fff', null, 800);
+    } else {
+      // combo / multiplier
+      if (mult > 1) textC('x' + mult, W / 2 + 56, NETY + 6, 18, '#ffe14d', 'rgba(120,80,0,0.8)');
+      // ZOOMIES meter
+      const bw = 150, bx = (W - bw) / 2, by = H - 22;
+      ctx.fillStyle = 'rgba(0,0,0,0.25)'; roundRect(bx, by, bw, 12, 6); ctx.fill();
+      const fillC = frenzy > 0 ? `hsl(${(animT * 200) % 360},90%,60%)` : '#ffcf3f';
+      ctx.fillStyle = fillC; roundRect(bx + 2, by + 2, (bw - 4) * (frenzy > 0 ? 1 : zoom), 8, 4); ctx.fill();
+      textC(frenzy > 0 ? 'FRENZY!' : 'ZOOMIES', W / 2, by - 9, 11, 'rgba(255,255,255,0.85)', null, 800);
+    }
   }
 
   function drawDanger() {
@@ -1683,10 +1713,13 @@
     ctx.fillStyle = 'rgba(255,255,255,0.88)'; roundRect(W / 2 + 4, 286, 88, 32, 16); ctx.fill();
     textC('🔥 ' + streak + 'd', W / 2 + 48, 302, 15, '#a85a2a', null, 700);
 
-    // play button
-    drawBtn(W / 2 - 80, 344, 160, 52, '#5fb0e8', '#fff', 22);
-    button('play', W / 2 - 80, 344, 160, 52);
-    textC('PLAY', W / 2, 370, 22, '#fff', null, 800);
+    // mode buttons: Arcade + Levels
+    drawBtn(W / 2 - 80, 344, 76, 52, '#5fb0e8');
+    button('arcade', W / 2 - 80, 344, 76, 52);
+    textC('Arcade', W / 2 - 42, 370, 17, '#fff', null, 800);
+    drawBtn(W / 2 + 4, 344, 76, 52, '#e88fb6');
+    button('levels', W / 2 + 4, 344, 76, 52);
+    textC('Levels', W / 2 + 42, 370, 17, '#fff', null, 800);
 
     // shop + settings row
     drawBtn(W / 2 - 80, 410, 76, 40, '#7bc86b', '#fff', 15);
@@ -1706,8 +1739,80 @@
     ctx.globalAlpha = 1;
   }
 
-  // ----- game over -----
+  // ----- level select -----
+  function drawLevelSelect() {
+    drawShinyTitle('Levels', W / 2, 74, 34);
+    const cols = 4, tw = 72, th = 78, gap = 10;
+    const x0 = (W - (cols * tw + (cols - 1) * gap)) / 2, y0 = 132;
+    for (let i = 0; i < LEVELS.length; i++) {
+      const tx = x0 + (i % cols) * (tw + gap);
+      const ty = y0 + Math.floor(i / cols) * (th + gap);
+      const open = levelUnlocked(i), got = levelStars[i] || 0;
+      ctx.fillStyle = open ? '#fff8ec' : 'rgba(255,248,236,0.45)';
+      roundRect(tx, ty, tw, th, 12); ctx.fill();
+      if (open) { button('lvl:' + i, tx, ty, tw, th); }
+      ctx.fillStyle = open ? '#caa' : 'rgba(160,150,130,0.5)';
+      roundRect(tx + 6, ty + 6, tw - 12, 34, 8); ctx.fill();
+      textC(String(i + 1), tx + tw / 2, ty + 24, 22, open ? '#5a4a2a' : 'rgba(90,74,42,0.5)', null, 800);
+      if (open) {
+        drawMiniStars(tx + tw / 2, ty + 58, got, 8);
+      } else {
+        // padlock
+        ctx.strokeStyle = 'rgba(90,80,60,0.6)'; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(tx + tw / 2, ty + 52, 6, Math.PI, TAU); ctx.stroke();
+        ctx.fillStyle = 'rgba(90,80,60,0.6)'; roundRect(tx + tw / 2 - 9, ty + 52, 18, 14, 3); ctx.fill();
+      }
+    }
+    drawBtn(W / 2 - 60, H - 64, 120, 42, '#7bc86b');
+    button('lvback', W / 2 - 60, H - 64, 120, 42);
+    textC('Back', W / 2, H - 43, 16, '#fff', null, 800);
+  }
+
+  // ----- level clear / fail card -----
+  function drawLevelOver() {
+    ctx.fillStyle = 'rgba(0,0,0,0.42)'; ctx.fillRect(0, 0, W, H);
+    const win = levelResult === 'win';
+    const pw = 270, ph = 244, px = (W - pw) / 2, py = H * 0.2;
+    ctx.fillStyle = '#fff8ec'; roundRect(px, py, pw, ph, 22); ctx.fill();
+    ctx.fillStyle = '#f2e3c8'; roundRect(px + 8, py + 8, pw - 16, ph - 16, 16); ctx.fill();
+    textC(win ? 'Level ' + (currentLevel + 1) + ' Clear!' : 'Out of Shots', W / 2, py + 34, win ? 24 : 23, win ? '#3a8a3a' : '#c75a3a', null, 800);
+
+    if (win) {
+      for (let i = 0; i < 3; i++) {
+        const pop = clamp(starPopT - 0.2 - i * 0.28, 0, 1);
+        const filled = i < earnedStars;
+        const sc = filled ? 0.4 + easeOut(pop) * 0.75 : 1;
+        const lift = filled ? -easeOut(pop) * 6 : 0;
+        drawStar(W / 2 + (i - 1) * 50, py + 86 + lift, 21 * sc, filled ? '#ffcf3f' : 'rgba(0,0,0,0.12)');
+      }
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.font = '700 15px -apple-system, "Segoe UI", system-ui, sans-serif'; ctx.fillStyle = '#8a7a5a';
+      ctx.fillText('SCORE', px + 32, py + 130); ctx.fillText('SHOTS LEFT', px + 32, py + 158); ctx.fillText('TREATS', px + 32, py + 186);
+      ctx.textAlign = 'right'; ctx.fillStyle = '#5a4a2a';
+      ctx.font = '800 17px -apple-system, "Segoe UI", system-ui, sans-serif';
+      ctx.fillText(String(score), px + pw - 32, py + 130);
+      ctx.fillText(String(shotsLeft), px + pw - 32, py + 158);
+      ctx.fillStyle = '#3a8a3a'; ctx.fillText('+' + (treats - runStartTreats), px + pw - 32, py + 186);
+    } else {
+      drawMiniStars(W / 2, py + 92, 0, 12);
+      textC('so close — try again!', W / 2, py + 140, 16, '#8a7a5a', null, 700);
+    }
+
+    // buttons
+    const by = py + ph - 48, last = currentLevel >= LEVELS.length - 1;
+    if (win && !last) {
+      drawBtn(px + 20, by, 70, 36, '#9aa'); button('lvmenu', px + 20, by, 70, 36); textC('Menu', px + 55, by + 18, 14, '#fff', null, 800);
+      drawBtn(px + 98, by, 70, 36, '#caa84a'); button('lvretry', px + 98, by, 70, 36); textC('Retry', px + 133, by + 18, 14, '#fff', null, 800);
+      drawBtn(px + 176, by, 74, 36, '#5fb0e8'); button('lvnext', px + 176, by, 74, 36); textC('Next', px + 213, by + 18, 14, '#fff', null, 800);
+    } else {
+      drawBtn(px + 30, by, 100, 38, '#9aa'); button('lvmenu', px + 30, by, 100, 38); textC('Menu', px + 80, by + 19, 15, '#fff', null, 800);
+      drawBtn(px + 140, by, 100, 38, '#5fb0e8'); button('lvretry', px + 140, by, 100, 38); textC('Retry', px + 190, by + 19, 15, '#fff', null, 800);
+    }
+  }
+
+  // ----- game over (arcade) -----
   function drawOver() {
+    if (mode === 'levels') { drawLevelOver(); return; }
     ctx.fillStyle = 'rgba(0,0,0,0.34)'; ctx.fillRect(0, 0, W, H);
     const pw = 264, ph = 232, px = (W - pw) / 2, py = H * 0.22;
     ctx.fillStyle = '#fff8ec'; roundRect(px, py, pw, ph, 22); ctx.fill();
@@ -1799,7 +1904,92 @@
   // ---------------------------------------------------------------------------
   // Scene transitions
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Levels mode (v2): fixed layouts, limited shots, 3-star clears
+  // ---------------------------------------------------------------------------
+  // grid chars:  Y lime  B sky  P pink  G grape  T teal  R cherry
+  //              . empty   S stone(2 hits)   M metal(unmatchable)
+  //              lowercase y/b/p/g/t/r = a caged ball (free it by popping a neighbour)
+  const LCHAR = { Y: 0, B: 1, P: 2, G: 3, T: 4, R: 5 };
+  const LEVELS = [
+    { shots: 12, grid: ['YYBBYY', 'YYBBY', 'YYBBYY'] },
+    { shots: 14, grid: ['BBYYBB', 'BYYBB', 'BBYYBB', 'BYYBB'] },
+    { shots: 14, grid: ['YYBBPP', 'BBPPY', 'PPYYB', 'YYBBP'] },
+    { shots: 18, grid: ['PPPPPPPP', 'YYYYYYY', 'BBBBBB', 'PPPPP', 'YYYY', 'BBB'] },
+    { shots: 14, grid: ['YBPYBP', 'YBPYB', 'YBPYBP', 'YBPYB'] },
+    { shots: 16, grid: ['GGPPYY', 'PPYYB', 'YYBBG', 'BBGGP', 'GGPPY'] },
+    { shots: 16, grid: ['BBGGBB', 'GGBBG', 'BBGGBB', 'GGBBG', 'BBGGBB'] },
+    { shots: 15, grid: ['YBPGT', 'BPGTY', 'PGTYB', 'GTYBP'] },
+    { shots: 15, grid: ['YYSBBY', 'YSBBS', 'YYBBYY', 'BBYYS'] },
+    { shots: 17, grid: ['BBMGGB', 'BGGMB', 'MBBGG', 'GGBBM', 'BBGGB'] },
+    { shots: 17, grid: ['BBbBBb', 'BBBBB', 'bBBbB', 'YYBBYY'] },
+    { shots: 20, grid: ['RTGPBY', 'TGPBR', 'SPBRT', 'GPBRG', 'BMRTB', 'RRGGTT'] },
+  ];
+  function starThresholds(shots) {
+    return { s2: Math.max(1, Math.round(shots * 0.2)), s3: Math.max(2, Math.round(shots * 0.4)) };
+  }
+  function parseCell(ch) {
+    if (ch === '.' || ch === ' ') return null;
+    if (ch === 'S') return { kind: 'stone', hp: 2 };
+    if (ch === 'M') return { kind: 'metal' };
+    const up = ch.toUpperCase();
+    if (LCHAR[up] == null) return null;
+    return ch === up ? { kind: 'ball', color: LCHAR[up] } : { kind: 'caged', color: LCHAR[up] };
+  }
+  function buildLevelGrid(spec) {
+    const g = [];
+    for (let r = 0; r < spec.grid.length; r++) {
+      const row = new Array(cellCount(r)).fill(null);
+      const s = spec.grid[r];
+      for (let c = 0; c < row.length && c < s.length; c++) row[c] = parseCell(s[c]);
+      g.push(row);
+    }
+    return g;
+  }
+  function levelUnlocked(i) { return i === 0 || (levelStars[i - 1] || 0) > 0; }
+  function loadLevel(idx) {
+    if (idx < 0 || idx >= LEVELS.length) return;
+    mode = 'levels'; scene = 'play'; paused = false;
+    currentLevel = idx; levelResult = null; earnedStars = 0;
+    score = 0; combo = 0; mult = 1; newBest = false;
+    shotsFired = 0; shotsSinceDrop = 0; zoom = 0; frenzy = 0;
+    proj = null; fallers = []; particles = []; coins = []; pops = [];
+    inputLock = false; aiming = false; dangerPulse = 0;
+    pup.lx = pup.ly = 0; pup.sx = pup.sy = 1; pup.leap = null; pup.mood = 0;
+    rowParity0 = 0; descendAnim = 0;
+    runStartTreats = treats;
+    grid = buildLevelGrid(LEVELS[idx]);
+    shotsLeft = LEVELS[idx].shots;
+    cur = makeQueueBall(false); nxt = makeQueueBall(false);
+    hintEl.classList.add('hidden');
+  }
+  function levelComplete() {
+    const th = starThresholds(LEVELS[currentLevel].shots);
+    earnedStars = shotsLeft >= th.s3 ? 3 : shotsLeft >= th.s2 ? 2 : 1;
+    treats += 30 + earnedStars * 20;                       // completion treat bonus
+    levelStars[currentLevel] = Math.max(levelStars[currentLevel] || 0, earnedStars);
+    save('levelStars', levelStars); save('treats', treats);
+    if (score > best) { best = score; newBest = true; save('best', best); }
+    levelResult = 'win'; scene = 'over'; starPopT = 0;
+    playClear(); clearWiggle = 1.6; flash = Math.max(flash, 0.35);
+    pops.push({ x: W / 2, y: H * 0.4, t: 1.4, txt: 'LEVEL CLEAR!', size: 28, col: '#fff', stroke: 'rgba(60,120,40,0.9)' });
+  }
+  function levelFail() {
+    levelResult = 'lose'; scene = 'over';
+    save('treats', treats);
+    playThud(); flash = Math.max(flash, 0.4); shake = Math.max(shake, 8);
+  }
+  function drawStar(cx, cy, rr, fill) {
+    star(cx, cy, 5, rr, rr * 0.45);
+    ctx.fillStyle = fill; ctx.fill();
+    ctx.lineWidth = 1.4; ctx.strokeStyle = 'rgba(120,90,20,0.45)'; ctx.stroke();
+  }
+  function drawMiniStars(cx, cy, got, s) {
+    for (let i = 0; i < 3; i++) drawStar(cx + (i - 1) * (s * 2.4), cy, s, i < got ? '#ffcf3f' : 'rgba(0,0,0,0.14)');
+  }
+
   function startGame() {
+    mode = 'arcade';
     scene = 'play'; paused = false;
     score = 0; combo = 0; mult = 1; newBest = false;
     shotsFired = 0; shotsSinceDrop = 0; zoom = 0; frenzy = 0;
@@ -1823,7 +2013,7 @@
     save('best', best); save('treats', treats);
     hintEl.classList.add('hidden');
   }
-  function toTitle() { scene = 'title'; paused = false; save('treats', treats); hintEl.classList.add('hidden'); }
+  function toTitle() { scene = 'title'; mode = 'arcade'; paused = false; save('treats', treats); hintEl.classList.add('hidden'); }
 
   // ---------------------------------------------------------------------------
   // Input
@@ -1875,7 +2065,13 @@
     downPos = null;
   }
   function handleButton(id) {
-    if (id === 'play' || id === 'again') { startGame(); return; }
+    if (id === 'play' || id === 'arcade' || id === 'again') { startGame(); return; }
+    if (id === 'levels') { scene = 'levels'; return; }
+    if (id === 'lvback') { scene = 'title'; return; }
+    if (id && id.indexOf('lvl:') === 0) { loadLevel(+id.split(':')[1]); return; }
+    if (id === 'lvretry') { loadLevel(currentLevel); return; }
+    if (id === 'lvmenu') { scene = 'levels'; paused = false; return; }
+    if (id === 'lvnext') { if (currentLevel + 1 < LEVELS.length) loadLevel(currentLevel + 1); else scene = 'levels'; return; }
     if (id === 'shop') { scene = 'shop'; return; }
     if (id === 'shopback') { scene = 'title'; return; }
     if (id === 'mute' || id === 'pmute') { muted = !muted; save('muted', muted); return; }
@@ -1906,15 +2102,16 @@
     if (e.code === 'Space') {
       e.preventDefault();
       if (scene === 'title') startGame();
-      else if (scene === 'over') startGame();
+      else if (scene === 'over') { if (mode === 'levels') loadLevel(currentLevel); else startGame(); }
       else if (scene === 'play' && !paused && !proj && !inputLock) fire();
     }
     if (e.key === 'ArrowLeft' && scene === 'play') setAimFromPoint(launch.x - 100, launch.y - 120);
     if (e.key === 'ArrowRight' && scene === 'play') setAimFromPoint(launch.x + 100, launch.y - 120);
-    if ((e.key === 'r' || e.key === 'R') && (scene === 'play' || scene === 'over')) startGame();
+    if ((e.key === 'r' || e.key === 'R') && (scene === 'play' || scene === 'over')) { if (mode === 'levels') loadLevel(currentLevel); else startGame(); }
     if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
       if (scene === 'play') paused = !paused;
-      else if (scene === 'shop') scene = 'title';
+      else if (scene === 'shop' || scene === 'levels') scene = 'title';
+      else if (scene === 'over' && mode === 'levels') scene = 'levels';
     }
   });
 
@@ -1950,6 +2147,7 @@
     updateParticles();
     if (clearWiggle > 0) clearWiggle = Math.max(0, clearWiggle - dt);
     if (praiseT > 0) praiseT -= dt;
+    if (scene === 'over' && mode === 'levels' && levelResult === 'win') starPopT += dt * 2.2;
     for (const p of pops) { p.y -= 0.5; p.t -= dt * 0.9; }
     pops = pops.filter((p) => p.t > 0);
 
@@ -1980,13 +2178,14 @@
       drawTitle();
     } else if (scene === 'shop') {
       drawShop();
+    } else if (scene === 'levels') {
+      drawLevelSelect();
     } else {
       // play / over share the board view
       drawBoard();
       if (proj) drawSpecialProjectile(proj);
       drawFallers();
-      if (scene === 'play' && !paused) { drawDanger(); drawAim(); }
-      else { /* still show danger line faded on over */ }
+      if (scene === 'play' && !paused) { if (mode === 'arcade') drawDanger(); else dangerPulse = 0; drawAim(); }
       drawQueue();
       drawParticles();
       drawPops();

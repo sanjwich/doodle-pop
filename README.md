@@ -126,8 +126,15 @@ tools/          icon generator (node tools/make-icons.mjs)
 node tools/make-icons.mjs
 ```
 
+## Modes
+
+- **Arcade / Endless** — the descending net, score chase and ZOOMIES frenzy.
+  One more run.
+- **Levels** — 12 hand-built layouts, each cleared in a limited number of
+  shots for a **1–3 star** rating. Stars and unlocks persist; clear a level to
+  open the next. No descending net or frenzy here — it's a pure puzzle.
+
 ## Roadmap
 
-v1 is **Arcade / Endless** only. The board, matching and catch code are kept
-mode-agnostic so a **Levels** mode (fixed layouts, limited shots, 3-star
-ratings) can slot in for v2.
+Both modes ship in v2. Possible next steps: more level packs, a level editor,
+leaderboards, and a daily challenge.
