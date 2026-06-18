@@ -1,6 +1,6 @@
 /* Doodle Pop service worker — offline-first cache so it installs & plays
    without a network connection once loaded. Bump CACHE on any asset change. */
-const CACHE = 'doodle-pop-v2';
+const CACHE = 'doodle-pop-v3';
 const ASSETS = [
   './',
   './index.html',

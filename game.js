@@ -310,7 +310,8 @@
   let shake = 0, flash = 0, timeScale = 1;
 
   // animation clocks
-  let animT = 0, runT = 0, fireFlick = 0, aimPose = 0;
+  let animT = 0, runT = 0, fireFlick = 0, aimPose = 0, fireT = -1;
+  const FIRE_DUR = 0.52;   // seconds the throw "hop" lasts
 
   // puppy launcher
   const pup = { lx: 0, ly: 0, sx: 1, sy: 1, leap: null, mood: 0 };
@@ -438,17 +439,18 @@
     opts = opts || {};
     const wag = opts.wag || 1;
     const alert = opts.alert || 0;     // 0..1 — "locked on a target" aiming pose
-    // ----- TAIL (wags normally; raises & stiffens when locked on a target) -----
+    const thrust = opts.thrust || 0;   // 0..1 — the throw/launch follow-through
+    // ----- TAIL (wags normally; raises & stiffens on aim; big swish on the throw) -----
     ctx.save();
     ctx.translate(-23, -2);
-    ctx.rotate(Math.sin(animT * 9 * wag) * (0.35 * wag * (1 - alert * 0.7)) - 0.5 - alert * 0.34);
+    ctx.rotate(Math.sin(animT * 9 * wag) * (0.35 * wag * (1 - alert * 0.7)) - 0.5 - alert * 0.5 - thrust * 0.7);
     fluffBlob(-4, 0, 8, 7, C.base, 0.18, 6);
     drawCurls(-4, 0, 8, 7, TAIL_CURLS);
     ctx.restore();
 
     drawLeg(-12, 13, runT + Math.PI, false);
     drawLeg(-6, 14, runT + Math.PI * 0.6, false);
-    drawEar(20, -16, 0.5 + Math.sin(animT * 8) * 0.12 - (opts.worried ? 0.5 : 0) - alert * 0.5, 24, 8, false);
+    drawEar(20, -16, 0.5 + Math.sin(animT * 8) * 0.12 - (opts.worried ? 0.5 : 0) - alert * 0.7 - thrust * 0.8, 24, 8, false);
 
     // ----- BODY -----
     fluffBlob(0, 2, 22, 14, C.base, 0.06, 7);
@@ -490,7 +492,7 @@
       ctx.restore();
     }
 
-    drawEar(hx - 6, hy - 12, -0.35 + Math.sin(animT * 8) * 0.14 - (opts.worried ? -0.4 : 0) - alert * 0.42, 28, 9, true);
+    drawEar(hx - 6, hy - 12, -0.35 + Math.sin(animT * 8) * 0.14 - (opts.worried ? -0.4 : 0) - alert * 0.58 - thrust * 0.7, 28, 9, true);
 
     // ----- MUZZLE -----
     fluffBlob(hx + 13, hy + 4, 12, 9.2, C.base, 0.12, 7);
@@ -1003,6 +1005,8 @@
     const speed = 9.2;
     proj = { x: launch.x, y: launch.y, vx: Math.cos(aim.a) * speed, vy: Math.sin(aim.a) * speed, ball: cur };
     fireFlick = 1;
+    fireT = 0;
+    spawnDust(pupBase.x, pupBase.y + 26);
     playFire();
     cur = nxt;
     nxt = makeQueueBall(shotsFired > 2);
@@ -1338,6 +1342,18 @@
   // ---------------------------------------------------------------------------
   // Particles / coins
   // ---------------------------------------------------------------------------
+  function spawnDust(x, y) {
+    // a low kick-up of dust as the pup pushes off to throw
+    const n = 9;
+    for (let i = 0; i < n; i++) {
+      const dir = i % 2 ? 1 : -1;
+      particles.push({
+        x: x + dir * (3 + Math.random() * 9), y: y - Math.random() * 3,
+        vx: dir * (0.7 + Math.random() * 2.4), vy: -0.4 - Math.random() * 1.7,
+        life: 1.3, col: ['#ece5d6', '#dcd3bf', '#cdc4ad'][i % 3], r: 3 + Math.random() * 3.2,
+      });
+    }
+  }
   function spawnPuff(x, y, colObj) {
     const n = 6 + (Math.random() * 4 | 0);
     for (let i = 0; i < n; i++) {
@@ -1513,22 +1529,23 @@
 
     // Aim wind-up + fire-lunge pose, layered on top of any catch-leap offset.
     const coil = aimPose;                                 // 0..1 while aiming
-    const fl = fireFlick;                                 // 1..0 spike on release
+    const fp = fireT >= 0 ? fireT / FIRE_DUR : 0;          // 0..1 throw progress
+    const fl = fp > 0 ? Math.pow(Math.sin(fp * Math.PI), 0.5) : 0;  // punchy rise + hang + fall arc
     const adx = Math.cos(aim.a), ady = Math.sin(aim.a);   // aim direction (ady<0 = up)
-    const wiggle = Math.sin(animT * 20) * coil * 2.0;     // anticipation butt-wiggle
-    const poseX = pup.lx + wiggle + fl * adx * 16;        // lunge toward the aim on release
-    const poseY = pup.ly + coil * 8 + fl * ady * 16;      // deep crouch while aiming, spring on fire
-    const psx = 1.5 * pup.sx * (1 + coil * 0.10 - fl * 0.05);  // aim: widen;  fire: narrow
-    const psy = 1.5 * pup.sy * (1 - coil * 0.16 + fl * 0.14);  // aim: crouch; fire: spring tall
+    const wiggle = Math.sin(animT * 20) * coil * 2.2;     // anticipation butt-wiggle
+    const poseX = pup.lx + wiggle + fl * adx * 28;        // big lunge toward the aim on release
+    const poseY = pup.ly + coil * 8 + fl * ady * 28;      // deep crouch aiming, big hop on the throw
+    const psx = 1.5 * pup.sx * (1 + coil * 0.10 - fl * 0.12);  // aim: widen;  throw: stretch narrow
+    const psy = 1.5 * pup.sy * (1 - coil * 0.16 + fl * 0.26);  // aim: crouch; throw: stretch tall
 
     ctx.save();
     ctx.translate(pupBase.x + poseX, pupBase.y + poseY);
-    ctx.rotate(-coil * 0.05 + fl * adx * 0.11);           // lean back to aim, flick forward to throw
+    ctx.rotate(-coil * 0.05 + fl * adx * 0.18);           // lean back to aim, head-flick on the throw
     ctx.scale(psx, psy);
     drawPuppy({
       lookX, lookY, curColor: curCol, nxtColor: nxtCol,
       curSp: cur && cur.kind !== 'ball', nxtSp: nxt && nxt.kind !== 'ball',
-      worried, alert: coil, wear: equipped.wear,
+      worried, alert: coil, thrust: fl, wear: equipped.wear,
       wag: (frenzy > 0 || clearWiggle > 0 || pup.mood > 0) ? 2.2 : 1,
     });
     ctx.restore();
@@ -1937,6 +1954,7 @@
     pops = pops.filter((p) => p.t > 0);
 
     fireFlick *= 0.88;
+    if (fireT >= 0) { fireT += dt; if (fireT > FIRE_DUR) fireT = -1; }
     // aim wind-up eases in while actively aiming, out otherwise
     const wantAim = (scene === 'play' && !paused && aiming && !proj && !inputLock) ? 1 : 0;
     aimPose = lerp(aimPose, wantAim, 0.22);
