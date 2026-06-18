@@ -74,6 +74,7 @@
       } catch (e) {}
       if (a.state === 'running') audioReady = true;
     }
+    startMusic();
   }
   ['pointerdown', 'touchstart', 'touchend', 'mousedown', 'keydown'].forEach((ev) =>
     window.addEventListener(ev, unlockAudio, { passive: true })
@@ -208,6 +209,7 @@
   let streak = load('streak', 0) | 0;
   let lastPlay = load('lastPlay', '');
   let levelStars = load('levelStars', {}) || {};   // { levelIndex: bestStars (1-3) }
+  let musicOn = load('musicOn', true);              // background music on/off
 
   // Daily streak: tick once per calendar day, award a small treat bonus.
   let streakBonus = 0;
@@ -224,6 +226,73 @@
       save('streak', streak); save('lastPlay', lastPlay); save('treats', treats);
     }
   })();
+
+  // ---------------------------------------------------------------------------
+  // Background music — a light, upbeat procedural loop (Web Audio, no files)
+  // ---------------------------------------------------------------------------
+  const BPM = 124;
+  const STEP_T = (60 / BPM) / 2;                 // one eighth note
+  const nf = (m) => 440 * Math.pow(2, (m - 69) / 12);   // MIDI note -> frequency
+  // C – G – Am – Em – F – C – F – G : a warm, cheerful 8-bar progression
+  const PROG = [
+    { bass: 48, n: [60, 64, 67] },   // C
+    { bass: 43, n: [59, 62, 67] },   // G
+    { bass: 45, n: [60, 64, 69] },   // Am
+    { bass: 40, n: [59, 64, 67] },   // Em
+    { bass: 41, n: [60, 65, 69] },   // F
+    { bass: 48, n: [60, 64, 67] },   // C
+    { bass: 41, n: [60, 65, 69] },   // F
+    { bass: 43, n: [59, 62, 67] },   // G
+  ];
+  let musicGain = null, musicStep = 0, musicTime = 0, musicTimer = null;
+
+  function mNote(freq, t, dur, type, vol, freqEnd) {
+    const a = audio(); if (!a || !musicGain) return;
+    const o = a.createOscillator(), g = a.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    if (freqEnd) o.frequency.exponentialRampToValueAtTime(Math.max(1, freqEnd), t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(musicGain); o.start(t); o.stop(t + dur + 0.03);
+  }
+  function mHat(t, vol) {
+    const a = audio(); if (!a || !musicGain) return;
+    const len = Math.floor(a.sampleRate * 0.035);
+    const buf = a.createBuffer(1, len, a.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+    const s = a.createBufferSource(); s.buffer = buf;
+    const hp = a.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 7000;
+    const g = a.createGain(); g.gain.value = vol;
+    s.connect(hp); hp.connect(g); g.connect(musicGain); s.start(t);
+  }
+  function playMusicStep(step, t) {
+    const ch = PROG[Math.floor(step / 8)], e = step % 8;
+    if (e === 0) for (const m of ch.n) mNote(nf(m), t, STEP_T * 7.6, 'sine', 0.02);        // sustained chord pad
+    if (e === 0 || e === 4) { mNote(nf(ch.bass), t, STEP_T * 1.7, 'triangle', 0.06); mNote(150, t, 0.12, 'sine', 0.07, 48); } // bass + kick on beats 1 & 3
+    const arp = [ch.n[0], ch.n[1], ch.n[2], ch.n[0] + 12];
+    mNote(nf(arp[e % 4]), t, STEP_T * 0.85, 'triangle', 0.038);                            // bouncy 8th-note arpeggio
+    if (e % 2 === 1) mHat(t, 0.018);                                                       // offbeat hi-hat
+  }
+  function scheduleMusic() {
+    const a = audio(); if (!a) return;
+    if (!musicGain) { musicGain = a.createGain(); musicGain.gain.value = 0; musicGain.connect(a.destination); }
+    if (musicTime < a.currentTime) musicTime = a.currentTime + 0.05;   // re-sync after a tab-switch gap
+    const on = !muted && musicOn;
+    while (musicTime < a.currentTime + 0.3) {                          // schedule ~300ms ahead
+      if (on) playMusicStep(musicStep, musicTime);
+      musicStep = (musicStep + 1) % (PROG.length * 8);
+      musicTime += STEP_T;
+    }
+    musicGain.gain.setTargetAtTime(on ? 0.6 : 0.0, a.currentTime, 0.3);
+  }
+  function startMusic() {
+    const a = audio(); if (!a || musicTimer) return;
+    musicTimer = true;          // started flag; the lookahead scheduler runs from the main loop
+    musicTime = a.currentTime + 0.12;
+    scheduleMusic();
+  }
 
   // ---------------------------------------------------------------------------
   // Tennis-ball colours + specials
@@ -1721,17 +1790,20 @@
     button('levels', W / 2 + 4, 344, 76, 52);
     textC('Levels', W / 2 + 42, 370, 17, '#fff', null, 800);
 
-    // shop + settings row
-    drawBtn(W / 2 - 80, 410, 76, 40, '#7bc86b', '#fff', 15);
+    // shop + audio + accessibility (two rows of two)
+    drawBtn(W / 2 - 80, 410, 76, 40, '#7bc86b');
     button('shop', W / 2 - 80, 410, 76, 40);
     textC('Shop', W / 2 - 42, 430, 15, '#fff', null, 800);
-    drawBtn(W / 2 + 4, 410, 76, 40, muted ? '#b88' : '#88a', '#fff', 15);
+    drawBtn(W / 2 + 4, 410, 76, 40, muted ? '#b88' : '#88a');
     button('mute', W / 2 + 4, 410, 76, 40);
     textC(muted ? 'Muted' : 'Sound', W / 2 + 42, 430, 15, '#fff', null, 800);
 
-    drawBtn(W / 2 - 80, 458, 160, 36, cbMode ? '#caa84a' : '#9aa', '#fff', 13);
-    button('cb', W / 2 - 80, 458, 160, 36);
-    textC('Colorblind pips: ' + (cbMode ? 'ON' : 'OFF'), W / 2, 476, 13, '#fff', null, 800);
+    drawBtn(W / 2 - 80, 456, 76, 40, musicOn && !muted ? '#6fbede' : '#9aa');
+    button('music', W / 2 - 80, 456, 76, 40);
+    textC(musicOn ? 'Music' : 'No Music', W / 2 - 42, 476, musicOn ? 15 : 12, '#fff', null, 800);
+    drawBtn(W / 2 + 4, 456, 76, 40, cbMode ? '#caa84a' : '#9aa');
+    button('cb', W / 2 + 4, 456, 76, 40);
+    textC('Pips ' + (cbMode ? 'ON' : 'OFF'), W / 2 + 42, 476, 14, '#fff', null, 800);
 
     const a = 0.55 + 0.45 * Math.sin(animT * 4);
     ctx.globalAlpha = a;
@@ -1848,13 +1920,16 @@
   // ----- pause -----
   function drawPauseOverlay() {
     ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(0, 0, W, H);
-    textC('Paused', W / 2, H * 0.32, 32, '#fff', 'rgba(0,0,0,0.4)', 800);
-    drawBtn(W / 2 - 80, H * 0.4, 160, 46, '#5fb0e8', '#fff', 18); button('resume', W / 2 - 80, H * 0.4, 160, 46);
-    textC('Resume', W / 2, H * 0.4 + 23, 18, '#fff', null, 800);
-    drawBtn(W / 2 - 80, H * 0.4 + 56, 160, 42, muted ? '#b88' : '#88a', '#fff', 16); button('pmute', W / 2 - 80, H * 0.4 + 56, 160, 42);
-    textC(muted ? 'Sound: Off' : 'Sound: On', W / 2, H * 0.4 + 77, 16, '#fff', null, 800);
-    drawBtn(W / 2 - 80, H * 0.4 + 106, 160, 42, '#7bc86b', '#fff', 16); button('phome', W / 2 - 80, H * 0.4 + 106, 160, 42);
-    textC('Quit to Title', W / 2, H * 0.4 + 127, 16, '#fff', null, 800);
+    textC('Paused', W / 2, H * 0.3, 32, '#fff', 'rgba(0,0,0,0.4)', 800);
+    const y = H * 0.38;
+    drawBtn(W / 2 - 80, y, 160, 44, '#5fb0e8'); button('resume', W / 2 - 80, y, 160, 44);
+    textC('Resume', W / 2, y + 22, 18, '#fff', null, 800);
+    drawBtn(W / 2 - 80, y + 54, 76, 40, muted ? '#b88' : '#88a'); button('pmute', W / 2 - 80, y + 54, 76, 40);
+    textC(muted ? 'Muted' : 'Sound', W / 2 - 42, y + 74, 15, '#fff', null, 800);
+    drawBtn(W / 2 + 4, y + 54, 76, 40, musicOn && !muted ? '#6fbede' : '#9aa'); button('pmusic', W / 2 + 4, y + 54, 76, 40);
+    textC(musicOn ? 'Music' : 'No Music', W / 2 + 42, y + 74, musicOn ? 15 : 12, '#fff', null, 800);
+    drawBtn(W / 2 - 80, y + 104, 160, 42, '#7bc86b'); button('phome', W / 2 - 80, y + 104, 160, 42);
+    textC('Quit to Title', W / 2, y + 125, 16, '#fff', null, 800);
   }
 
   // ----- shop -----
@@ -2075,6 +2150,7 @@
     if (id === 'shop') { scene = 'shop'; return; }
     if (id === 'shopback') { scene = 'title'; return; }
     if (id === 'mute' || id === 'pmute') { muted = !muted; save('muted', muted); return; }
+    if (id === 'music' || id === 'pmusic') { musicOn = !musicOn; save('musicOn', musicOn); if (musicOn) startMusic(); return; }
     if (id === 'cb') { cbMode = !cbMode; save('cb', cbMode); return; }
     if (id === 'home' || id === 'phome') { toTitle(); return; }
     if (id === 'pause') { paused = true; return; }
@@ -2227,6 +2303,7 @@
     acc += scaled;
     let steps = 0;
     while (acc >= STEP && steps < 5) { update(STEP); acc -= STEP; steps++; }
+    if (musicTimer) scheduleMusic();   // keep the music lookahead fed from the render loop
     render();
     requestAnimationFrame(loop);
   }
