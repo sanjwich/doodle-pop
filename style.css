@@ -1,0 +1,49 @@
+:root {
+  --sky-top: #7fd0f4;
+  --sky-bottom: #cdeeb6;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #16202b;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  /* Prevent pull-to-refresh / rubber-banding on mobile */
+  overscroll-behavior: none;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#frame {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Respect iPhone safe areas */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+#game {
+  display: block;
+  background: linear-gradient(var(--sky-top), var(--sky-bottom));
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  touch-action: none;
+}
+
+/* The on-canvas hints (context-aware, never overlapping the HUD) replace the
+   old fixed HTML hint. Kept in the DOM as a harmless no-op for game.js refs. */
+#hint {
+  display: none;
+}

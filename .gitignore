@@ -1,0 +1,17 @@
+# Editor / local config
+.claude/
+
+# Reference project (the sibling game we lifted renderers from) — not deployed
+hoppy puppy/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Temp render files
+*-check.png
+chk.png
+play.png
+title*.png
+ball*.png
+shot*.png
