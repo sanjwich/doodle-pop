@@ -310,7 +310,7 @@
   let shake = 0, flash = 0, timeScale = 1;
 
   // animation clocks
-  let animT = 0, runT = 0, fireFlick = 0;
+  let animT = 0, runT = 0, fireFlick = 0, aimPose = 0;
 
   // puppy launcher
   const pup = { lx: 0, ly: 0, sx: 1, sy: 1, leap: null, mood: 0 };
@@ -437,17 +437,18 @@
   function drawPuppy(opts) {
     opts = opts || {};
     const wag = opts.wag || 1;
-    // ----- TAIL (back, wagging) -----
+    const alert = opts.alert || 0;     // 0..1 — "locked on a target" aiming pose
+    // ----- TAIL (wags normally; raises & stiffens when locked on a target) -----
     ctx.save();
     ctx.translate(-23, -2);
-    ctx.rotate(Math.sin(animT * 9 * wag) * (0.35 * wag) - 0.5);
+    ctx.rotate(Math.sin(animT * 9 * wag) * (0.35 * wag * (1 - alert * 0.7)) - 0.5 - alert * 0.34);
     fluffBlob(-4, 0, 8, 7, C.base, 0.18, 6);
     drawCurls(-4, 0, 8, 7, TAIL_CURLS);
     ctx.restore();
 
     drawLeg(-12, 13, runT + Math.PI, false);
     drawLeg(-6, 14, runT + Math.PI * 0.6, false);
-    drawEar(20, -16, 0.5 + Math.sin(animT * 8) * 0.12 - (opts.worried ? 0.5 : 0), 24, 8, false);
+    drawEar(20, -16, 0.5 + Math.sin(animT * 8) * 0.12 - (opts.worried ? 0.5 : 0) - alert * 0.5, 24, 8, false);
 
     // ----- BODY -----
     fluffBlob(0, 2, 22, 14, C.base, 0.06, 7);
@@ -489,7 +490,7 @@
       ctx.restore();
     }
 
-    drawEar(hx - 6, hy - 12, -0.35 + Math.sin(animT * 8) * 0.14 - (opts.worried ? -0.4 : 0), 28, 9, true);
+    drawEar(hx - 6, hy - 12, -0.35 + Math.sin(animT * 8) * 0.14 - (opts.worried ? -0.4 : 0) - alert * 0.42, 28, 9, true);
 
     // ----- MUZZLE -----
     fluffBlob(hx + 13, hy + 4, 12, 9.2, C.base, 0.12, 7);
@@ -1509,18 +1510,32 @@
     const lookY = clamp((aim.y - launch.y) / 200, -1, 0.4);
     const curCol = cur ? queueGlint(cur) : null;
     const nxtCol = nxt ? queueGlint(nxt) : null;
+
+    // Aim wind-up + fire-lunge pose, layered on top of any catch-leap offset.
+    const coil = aimPose;                                 // 0..1 while aiming
+    const fl = fireFlick;                                 // 1..0 spike on release
+    const adx = Math.cos(aim.a), ady = Math.sin(aim.a);   // aim direction (ady<0 = up)
+    const wiggle = Math.sin(animT * 20) * coil * 2.0;     // anticipation butt-wiggle
+    const poseX = pup.lx + wiggle + fl * adx * 16;        // lunge toward the aim on release
+    const poseY = pup.ly + coil * 8 + fl * ady * 16;      // deep crouch while aiming, spring on fire
+    const psx = 1.5 * pup.sx * (1 + coil * 0.10 - fl * 0.05);  // aim: widen;  fire: narrow
+    const psy = 1.5 * pup.sy * (1 - coil * 0.16 + fl * 0.14);  // aim: crouch; fire: spring tall
+
     ctx.save();
-    ctx.translate(pupBase.x + pup.lx, pupBase.y + pup.ly);
-    ctx.scale(1.5 * pup.sx, 1.5 * pup.sy);
+    ctx.translate(pupBase.x + poseX, pupBase.y + poseY);
+    ctx.rotate(-coil * 0.05 + fl * adx * 0.11);           // lean back to aim, flick forward to throw
+    ctx.scale(psx, psy);
     drawPuppy({
       lookX, lookY, curColor: curCol, nxtColor: nxtCol,
       curSp: cur && cur.kind !== 'ball', nxtSp: nxt && nxt.kind !== 'ball',
-      worried, wear: equipped.wear, wag: (frenzy > 0 || clearWiggle > 0 || pup.mood > 0) ? 2.2 : 1,
+      worried, alert: coil, wear: equipped.wear,
+      wag: (frenzy > 0 || clearWiggle > 0 || pup.mood > 0) ? 2.2 : 1,
     });
     ctx.restore();
-    // current ball held aloft (hidden while flying)
+    // current ball held in the mouth — winds back as you aim, then springs away
     if (cur && !proj && !inputLock) {
-      drawTennisBall(launch.x, launch.y, R, cur.kind === 'ball' ? cur : queueCell(cur));
+      const bx = launch.x - adx * coil * 5, by = launch.y - ady * coil * 5;
+      drawTennisBall(bx, by, R, cur.kind === 'ball' ? cur : queueCell(cur));
     }
     // next-ball mini preview by the hopper
     if (nxt) { drawTennisBall(W - 22, launch.y, 11, nxt.kind === 'ball' ? nxt : queueCell(nxt)); textC('next', W - 22, launch.y + 18, 9, 'rgba(255,255,255,0.7)', null, 700); }
@@ -1921,7 +1936,10 @@
     for (const p of pops) { p.y -= 0.5; p.t -= dt * 0.9; }
     pops = pops.filter((p) => p.t > 0);
 
-    fireFlick *= 0.86;
+    fireFlick *= 0.88;
+    // aim wind-up eases in while actively aiming, out otherwise
+    const wantAim = (scene === 'play' && !paused && aiming && !proj && !inputLock) ? 1 : 0;
+    aimPose = lerp(aimPose, wantAim, 0.22);
     if (flash > 0) flash = Math.max(0, flash - dt * 1.6);
     if (shake > 0) shake = Math.max(0, shake - dt * 42);
     timeScale = lerp(timeScale, 1, 0.06);
